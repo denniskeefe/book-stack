@@ -1,0 +1,523 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="description" content="The shared shelf: who has which book out, what is overdue, and what reading level everything is.">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Book Pile">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="theme-color" content="#0d1214">
+<title>Book Pile Library</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="favicon.png" sizes="32x32">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<header>
+  <div class="wrap">
+    <div class="bar">
+      <h1 class="wordmark"><a href="index.html">Book&nbsp;<span>Pile</span></a></h1>
+      <div class="tally">the shared shelf</div>
+    </div>
+    <nav class="tabs">
+      <a class="tab" href="index.html">Scan</a>
+      <button class="tab" id="tab-shelf" aria-selected="true">Shelf</button>
+      <button class="tab" id="tab-readers" aria-selected="false">Readers</button>
+      <button class="tab" id="tab-out" aria-selected="false">Out</button>
+    </nav>
+  </div>
+</header>
+
+<main class="wrap">
+  <div class="stats">
+    <div class="stat"><b id="s-titles">—</b><span>Titles</span></div>
+    <div class="stat"><b id="s-copies">—</b><span>Copies</span></div>
+    <div class="stat"><b id="s-out">—</b><span>Checked out</span></div>
+    <div class="stat" id="s-late-wrap"><b id="s-late">—</b><span>Overdue</span></div>
+  </div>
+
+  <section id="view-shelf">
+    <div class="card">
+      <div class="tools"><input class="search" id="search" type="search" placeholder="Search title, author, ISBN" aria-label="Search the shelf"></div>
+      <div class="filters" id="filters"></div>
+      <div class="card-head">
+        <h2 id="shelf-count">—</h2>
+        <div class="spacer"></div>
+        <button class="btn small quiet" id="refresh">Refresh</button>
+      </div>
+      <ul class="books" id="shelf"></ul>
+      <div class="empty" id="shelf-empty" hidden><strong>Nothing here yet</strong>Scan a barcode and the book shows up on this shelf.</div>
+      <div class="tools" style="border-top:1px solid var(--line)">
+        <button class="btn small" id="export-csv">Download CSV</button>
+        <button class="btn small" id="retry-missing" hidden>Retry failed lookups</button>
+      </div>
+    </div>
+  </section>
+
+  <section id="view-readers" hidden>
+    <div class="card">
+      <div class="card-head"><h2>Add a reader</h2></div>
+      <form class="tools" id="add-reader">
+        <input class="field" id="reader-name" placeholder="Name" aria-label="Reader name" required maxlength="60">
+        <input class="field" id="reader-grade" placeholder="Grade or class (optional)" aria-label="Grade or class" maxlength="30" style="flex:0 1 220px">
+        <button class="btn small primary" type="submit">Add</button>
+      </form>
+    </div>
+    <div class="card" style="margin-top:16px">
+      <div class="card-head"><h2 id="readers-count">—</h2></div>
+      <ul class="books" id="readers"></ul>
+      <div class="empty" id="readers-empty" hidden><strong>No readers yet</strong>Add the people who borrow books, then they can check them out by name.</div>
+    </div>
+  </section>
+
+  <section id="view-out" hidden>
+    <div class="card">
+      <div class="card-head"><h2 id="out-count">—</h2></div>
+      <ul class="books" id="out"></ul>
+      <div class="empty" id="out-empty" hidden><strong>Everything is on the shelf</strong>Nothing is checked out right now.</div>
+    </div>
+  </section>
+
+  <footer>Anyone with this link can borrow, return and edit. Keep it to people you'd hand a library card.</footer>
+</main>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.118.0/dist/umd/supabase.js"></script>
+<script src="app.js"></script>
+<script>
+(function () {
+  "use strict";
+
+  var $ = BP.$, el = BP.el, db = BP.db;
+
+  var books = [], readers = [], loans = [];
+  var filterBand = "All";
+  var openPanel = null;   // isbn whose checkout panel is showing
+
+  /* ---------- loading ---------- */
+
+  function loadAll() {
+    return Promise.all([
+      db.from("catalog").select("*").order("added_at", { ascending: false }),
+      db.from("readers").select("*").eq("active", true).order("name"),
+      db.from("loans").select("*, books(title, authors, cover_url), readers(name)").is("returned_at", null).order("due_at")
+    ]).then(function (res) {
+      var bad = res.find(function (r) { return r.error; });
+      if (bad) throw bad.error;
+      books = res[0].data || [];
+      readers = res[1].data || [];
+      loans = res[2].data || [];
+      renderAll();
+    }).catch(function (err) {
+      BP.toast("Could not reach the library: " + (err.message || "unknown error"), true);
+      console.error(err);
+    });
+  }
+
+  function openLoansFor(isbn) {
+    return loans.filter(function (l) { return l.isbn13 === isbn; });
+  }
+
+  function loansByReader(id) {
+    return loans.filter(function (l) { return l.reader_id === id; });
+  }
+
+  /* ---------- rendering ---------- */
+
+  function coverNode(book) {
+    if (book.cover_url) {
+      var img = document.createElement("img");
+      img.className = "cover";
+      img.src = book.cover_url;
+      img.alt = "";
+      img.loading = "lazy";
+      img.onerror = function () { img.replaceWith(el("div", "cover", "no\ncover")); };
+      return img;
+    }
+    return el("div", "cover", book.lookup_state === "pending" ? "…" : "no\ncover");
+  }
+
+  function titleNode(book) {
+    var t = el("div", "t");
+    if (book.lookup_state === "pending") t.textContent = "Looking it up…";
+    else if (book.title) t.textContent = book.title;
+    else {
+      t.textContent = "Unknown book";
+      t.append(" ");
+      t.appendChild(el("span", "badge miss", "no match"));
+    }
+    return t;
+  }
+
+  function levelSelect(book) {
+    var sel = document.createElement("select");
+    sel.className = "level" + (book.grade_band_source === "auto" ? " auto" : "");
+    sel.setAttribute("aria-label", "Reading level for " + (book.title || book.isbn13));
+    BP.BANDS.forEach(function (band) {
+      var opt = document.createElement("option");
+      opt.value = band;
+      opt.textContent = band === "Unknown" ? "level?" : band;
+      if (band === book.grade_band) opt.selected = true;
+      sel.appendChild(opt);
+    });
+    sel.onchange = function () {
+      var band = sel.value;
+      db.from("books").update({ grade_band: band, grade_band_source: "manual" })
+        .eq("isbn13", book.isbn13).then(function (res) {
+          if (res.error) { BP.toast("Could not save the level.", true); return; }
+          book.grade_band = band;
+          book.grade_band_source = "manual";
+          BP.toast("Level set to " + (band === "Unknown" ? "unknown" : band));
+          renderShelf();
+        });
+    };
+    return sel;
+  }
+
+  function availabilityBadge(book) {
+    var out = book.checked_out, total = book.copies, free = book.available;
+    if (total === 0) return el("span", "badge", "no copies");
+    if (free <= 0) return el("span", "badge out", "all " + total + " out");
+    if (out > 0) return el("span", "badge ok", free + " of " + total + " in");
+    return el("span", "badge ok", total === 1 ? "on the shelf" : total + " on the shelf");
+  }
+
+  function renderStats() {
+    var copies = books.reduce(function (n, b) { return n + b.copies; }, 0);
+    var late = loans.filter(function (l) { return BP.daysUntil(l.due_at) < 0; }).length;
+    $("s-titles").textContent = books.length;
+    $("s-copies").textContent = copies;
+    $("s-out").textContent = loans.length;
+    $("s-late").textContent = late;
+    $("s-late-wrap").className = "stat" + (late ? " alert" : "");
+  }
+
+  function renderFilters() {
+    var host = $("filters");
+    host.textContent = "";
+    ["All"].concat(BP.BANDS).forEach(function (band) {
+      var count = band === "All" ? books.length
+        : books.filter(function (b) { return b.grade_band === band; }).length;
+      if (band !== "All" && !count) return;
+      var btn = el("button", "pill", band === "Unknown" ? "No level (" + count + ")" : band + " (" + count + ")");
+      btn.type = "button";
+      btn.setAttribute("aria-pressed", String(filterBand === band));
+      btn.onclick = function () { filterBand = band; renderFilters(); renderShelf(); };
+      host.appendChild(btn);
+    });
+  }
+
+  function visibleBooks() {
+    var q = $("search").value.trim().toLowerCase();
+    return books.filter(function (b) {
+      if (filterBand !== "All" && b.grade_band !== filterBand) return false;
+      if (!q) return true;
+      return (b.title + " " + b.authors + " " + b.isbn13 + " " + b.publisher).toLowerCase().indexOf(q) >= 0;
+    });
+  }
+
+  function checkoutPanel(book) {
+    var panel = el("div", "checkout");
+    panel.appendChild(el("h3", null, "Who's taking " + (book.title || book.isbn13) + "?"));
+
+    if (!readers.length) {
+      panel.appendChild(el("div", "a", "No readers yet — add someone on the Readers tab first."));
+      return panel;
+    }
+
+    var picks = el("div", "readers");
+    readers.forEach(function (r) {
+      var btn = el("button", "btn small", r.name + (r.grade ? " · " + r.grade : ""));
+      btn.type = "button";
+      btn.onclick = function () { checkOut(book, r, +panel.querySelector("select").value); };
+      picks.appendChild(btn);
+    });
+    panel.appendChild(picks);
+
+    var foot = el("div", "row");
+    var sel = document.createElement("select");
+    sel.className = "btn small";
+    sel.setAttribute("aria-label", "Loan length");
+    [[7, "1 week"], [14, "2 weeks"], [28, "4 weeks"]].forEach(function (p) {
+      var o = document.createElement("option");
+      o.value = p[0];
+      o.textContent = p[1];
+      if (p[0] === 14) o.selected = true;
+      sel.appendChild(o);
+    });
+    foot.appendChild(sel);
+    var cancel = el("button", "btn small quiet", "Cancel");
+    cancel.type = "button";
+    cancel.onclick = function () { openPanel = null; renderShelf(); };
+    foot.appendChild(cancel);
+    panel.appendChild(foot);
+    return panel;
+  }
+
+  function renderShelf() {
+    var list = $("shelf");
+    list.textContent = "";
+    var shown = visibleBooks();
+
+    shown.forEach(function (book) {
+      var li = document.createElement("li");
+      if (openPanel === book.isbn13) li.className = "open";
+      li.appendChild(coverNode(book));
+
+      var meta = el("div", "meta");
+      meta.appendChild(titleNode(book));
+      var byline = [book.authors, book.year, book.publisher].filter(Boolean).join(" · ");
+      if (byline) meta.appendChild(el("div", "a", byline));
+
+      var line = el("div", "line");
+      line.appendChild(levelSelect(book));
+      line.appendChild(availabilityBadge(book));
+      meta.appendChild(line);
+
+      var out = openLoansFor(book.isbn13);
+      if (out.length) {
+        var names = out.map(function (l) {
+          var who = (l.readers && l.readers.name) || "someone";
+          return who + " (" + BP.dueLabel(l.due_at) + ")";
+        }).join(", ");
+        meta.appendChild(el("div", "i", "with " + names));
+      }
+      li.appendChild(meta);
+
+      var actions = el("div", "qty");
+      var minus = el("button", null, "−");
+      minus.type = "button";
+      minus.title = "One fewer copy";
+      minus.onclick = function () { setCopies(book, book.copies - 1); };
+      var count = el("b", null, book.copies);
+      var plus = el("button", null, "+");
+      plus.type = "button";
+      plus.title = "One more copy";
+      plus.onclick = function () { setCopies(book, book.copies + 1); };
+      actions.append(minus, count, plus);
+
+      var wrap = el("div");
+      wrap.style.display = "grid";
+      wrap.style.gap = "6px";
+      wrap.style.justifyItems = "end";
+      var lend = el("button", "btn small" + (book.available > 0 ? " primary" : ""), "Check out");
+      lend.type = "button";
+      lend.disabled = book.available <= 0;
+      lend.onclick = function () {
+        openPanel = openPanel === book.isbn13 ? null : book.isbn13;
+        renderShelf();
+      };
+      wrap.append(lend, actions);
+      li.appendChild(wrap);
+
+      if (openPanel === book.isbn13) li.appendChild(checkoutPanel(book));
+      list.appendChild(li);
+    });
+
+    $("shelf-empty").hidden = shown.length > 0;
+    if (!shown.length && books.length) {
+      $("shelf-empty").innerHTML = "<strong>Nothing matches</strong>No book on the shelf matches that search or level.";
+    } else if (!books.length) {
+      $("shelf-empty").innerHTML = "<strong>Nothing here yet</strong>Scan a barcode and the book shows up on this shelf.";
+    }
+    $("shelf-count").textContent = shown.length + (shown.length === 1 ? " title" : " titles");
+    $("retry-missing").hidden = !books.some(function (b) { return b.lookup_state === "missing"; });
+  }
+
+  function renderReaders() {
+    var list = $("readers");
+    list.textContent = "";
+    readers.forEach(function (r) {
+      var li = document.createElement("li");
+      li.appendChild(el("div", "cover", r.name.slice(0, 1).toUpperCase()));
+
+      var meta = el("div", "meta");
+      meta.appendChild(el("div", "t", r.name));
+      if (r.grade) meta.appendChild(el("div", "a", r.grade));
+
+      var mine = loansByReader(r.id);
+      var late = mine.filter(function (l) { return BP.daysUntil(l.due_at) < 0; });
+      var line = el("div", "line");
+      line.appendChild(el("span", "badge" + (mine.length ? " out" : ""),
+        mine.length ? mine.length + " out" : "nothing out"));
+      if (late.length) line.appendChild(el("span", "badge late", late.length + " overdue"));
+      meta.appendChild(line);
+      li.appendChild(meta);
+
+      var off = el("button", "btn small quiet danger", "Remove");
+      off.type = "button";
+      off.onclick = function () {
+        if (mine.length) { BP.toast(r.name + " still has " + mine.length + " book(s) out.", true); return; }
+        db.from("readers").update({ active: false }).eq("id", r.id).then(function (res) {
+          if (res.error) { BP.toast("Could not remove that reader.", true); return; }
+          BP.toast(r.name + " removed");
+          loadAll();
+        });
+      };
+      li.appendChild(off);
+      list.appendChild(li);
+    });
+    $("readers-empty").hidden = readers.length > 0;
+    $("readers-count").textContent = readers.length + (readers.length === 1 ? " reader" : " readers");
+  }
+
+  function renderOut() {
+    var list = $("out");
+    list.textContent = "";
+    loans.forEach(function (loan) {
+      var book = loan.books || {};
+      var li = document.createElement("li");
+      li.appendChild(coverNode(book));
+
+      var meta = el("div", "meta");
+      meta.appendChild(el("div", "t", book.title || loan.isbn13));
+      meta.appendChild(el("div", "a", "with " + ((loan.readers && loan.readers.name) || "someone")));
+      var late = BP.daysUntil(loan.due_at) < 0;
+      var line = el("div", "line");
+      line.appendChild(el("span", "badge" + (late ? " late" : ""), BP.dueLabel(loan.due_at)));
+      meta.appendChild(line);
+      li.appendChild(meta);
+
+      var back = el("button", "btn small primary", "Return");
+      back.type = "button";
+      back.onclick = function () {
+        back.disabled = true;
+        db.from("loans").update({ returned_at: new Date().toISOString() }).eq("id", loan.id)
+          .then(function (res) {
+            if (res.error) { BP.toast("Could not record the return.", true); back.disabled = false; return; }
+            BP.toast("Back on the shelf");
+            loadAll();
+          });
+      };
+      li.appendChild(back);
+      list.appendChild(li);
+    });
+    $("out-empty").hidden = loans.length > 0;
+    $("out-count").textContent = loans.length + (loans.length === 1 ? " book out" : " books out");
+  }
+
+  function renderAll() {
+    renderStats();
+    renderFilters();
+    renderShelf();
+    renderReaders();
+    renderOut();
+  }
+
+  /* ---------- actions ---------- */
+
+  function checkOut(book, reader, days) {
+    var due = new Date(Date.now() + days * 86400000).toISOString();
+    db.from("loans").insert({ isbn13: book.isbn13, reader_id: reader.id, due_at: due })
+      .then(function (res) {
+        if (res.error) {
+          BP.toast(/on the shelf/.test(res.error.message || "")
+            ? "Every copy is already out."
+            : "Could not check that out.", true);
+          return;
+        }
+        openPanel = null;
+        BP.toast(reader.name + " has it until " + new Date(due).toLocaleDateString());
+        loadAll();
+      });
+  }
+
+  function setCopies(book, next) {
+    if (next < book.checked_out) { BP.toast("That many are already checked out.", true); return; }
+    if (next < 1) { BP.toast("Keep at least one copy — books can't be deleted here.", true); return; }
+    db.from("books").update({ copies: next }).eq("isbn13", book.isbn13).then(function (res) {
+      if (res.error) { BP.toast("Could not change the copy count.", true); return; }
+      loadAll();
+    });
+  }
+
+  /* ---------- export ---------- */
+
+  function csvCell(v) {
+    var s = v === undefined || v === null ? "" : String(v);
+    return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+  }
+
+  function toCSV() {
+    var head = ["isbn13", "title", "authors", "publisher", "year", "pages",
+                "reading_level", "level_source", "copies", "checked_out", "available",
+                "subjects", "source", "added_at"];
+    var out = [head.join(",")];
+    visibleBooks().forEach(function (b) {
+      out.push([b.isbn13, b.title, b.authors, b.publisher, b.year, b.pages,
+                b.grade_band, b.grade_band_source, b.copies, b.checked_out, b.available,
+                b.subjects, b.source, b.added_at].map(csvCell).join(","));
+    });
+    return out.join("\n");
+  }
+
+  /* ---------- wiring ---------- */
+
+  function showView(which) {
+    [["shelf", "view-shelf"], ["readers", "view-readers"], ["out", "view-out"]].forEach(function (pair) {
+      $("tab-" + pair[0]).setAttribute("aria-selected", String(pair[0] === which));
+      $(pair[1]).hidden = pair[0] !== which;
+    });
+  }
+
+  $("tab-shelf").onclick = function () { showView("shelf"); };
+  $("tab-readers").onclick = function () { showView("readers"); };
+  $("tab-out").onclick = function () { showView("out"); };
+  $("search").oninput = renderShelf;
+  $("refresh").onclick = loadAll;
+
+  $("add-reader").onsubmit = function (e) {
+    e.preventDefault();
+    var name = $("reader-name").value.trim();
+    if (!name) return;
+    db.from("readers").insert({ name: name, grade: $("reader-grade").value.trim() })
+      .then(function (res) {
+        if (res.error) {
+          BP.toast(/duplicate|unique/i.test(res.error.message || "")
+            ? "There is already a reader with that name."
+            : "Could not add that reader.", true);
+          return;
+        }
+        $("reader-name").value = "";
+        $("reader-grade").value = "";
+        BP.toast(name + " added");
+        loadAll();
+      });
+  };
+
+  $("export-csv").onclick = function () {
+    if (!books.length) { BP.toast("Nothing to export yet."); return; }
+    var blob = new Blob([toCSV()], { type: "text/csv;charset=utf-8" });
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement("a");
+    a.href = url;
+    a.download = "book-pile-" + BP.dayStamp(new Date()) + ".csv";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(function () { URL.revokeObjectURL(url); }, 2000);
+  };
+
+  $("retry-missing").onclick = function () {
+    var stuck = books.filter(function (b) { return b.lookup_state === "missing"; });
+    if (!stuck.length) return;
+    BP.toast("Retrying " + stuck.length + "…");
+    Promise.all(stuck.map(function (b) {
+      return BP.resolve(b.isbn13, b.grade_band_source === "manual").catch(function () {});
+    })).then(loadAll);
+  };
+
+  document.addEventListener("visibilitychange", function () {
+    if (!document.hidden) loadAll();
+  });
+
+  loadAll();
+})();
+</script>
+</body>
+</html>
