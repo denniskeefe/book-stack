@@ -5,10 +5,10 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="description" content="The shared shelf: who has which book out, what is overdue, and what reading level everything is.">
 <meta name="apple-mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-title" content="Book Pile">
+<meta name="apple-mobile-web-app-title" content="Book Stack">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="theme-color" content="#0d1214">
-<title>Book Pile Library</title>
+<title>Book Stack Library</title>
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" href="favicon.png" sizes="32x32">
 <link rel="apple-touch-icon" href="apple-touch-icon.png">
@@ -22,7 +22,7 @@
 <header>
   <div class="wrap">
     <div class="bar">
-      <h1 class="wordmark"><a href="index.html">Book&nbsp;<span>Pile</span></a></h1>
+      <h1 class="wordmark"><a href="index.html">Book&nbsp;<span>Stack</span></a></h1>
       <div class="tally">the shared shelf</div>
     </div>
     <nav class="tabs">
@@ -84,13 +84,13 @@
     </div>
   </section>
 
-  <footer>Anyone with this link can borrow, return and edit. Keep it to people you'd hand a library card.</footer>
+  <footer>Everyone here shares one passcode. <button class="btn small quiet" id="lock" type="button">Lock this device</button></footer>
 </main>
 
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.118.0/dist/umd/supabase.js"></script>
 <script src="app.js"></script>
 <script>
-(function () {
+BP.ready(function () {
   "use strict";
 
   var $ = BP.$, el = BP.el, db = BP.db;
@@ -496,7 +496,7 @@
     var url = URL.createObjectURL(blob);
     var a = document.createElement("a");
     a.href = url;
-    a.download = "book-pile-" + BP.dayStamp(new Date()) + ".csv";
+    a.download = "book-stack-" + BP.dayStamp(new Date()) + ".csv";
     document.body.appendChild(a);
     a.click();
     a.remove();
@@ -517,7 +517,10 @@
   });
 
   loadAll();
-})();
+});
+</script>
+<script>
+document.getElementById("lock").onclick = function () { BP.lockDevice(); };
 </script>
 </body>
 </html>

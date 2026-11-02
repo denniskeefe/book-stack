@@ -1,16 +1,17 @@
-/* Shared helpers for the scanner and the library dashboard. */
+/* Shared helpers, passcode gate and catalogue access for both pages. */
 window.BP = (function () {
   "use strict";
 
   var SUPABASE_URL = "https://omoltkwfacfnxtuommvt.supabase.co";
   var SUPABASE_KEY = "sb_publishable_oIl-you4RLtgi5fJx7auBw_VvDbZ5Mi";
-
-  var db = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY, {
-    db: { schema: "library" },
-    auth: { persistSession: false }
-  });
+  var PASS_KEY = "bookstack.pass";
 
   var BANDS = ["K-2", "3-5", "6-8", "9-12", "Adult", "Unknown"];
+
+  var BP = {
+    BANDS: BANDS,
+    db: null
+  };
 
   /* ---------- small DOM helpers ---------- */
 
@@ -35,6 +36,168 @@ window.BP = (function () {
     node.textContent = msg;
     clearTimeout(toastTimer);
     toastTimer = setTimeout(function () { node.remove(); }, 3000);
+  }
+
+  /* ---------- passcode ---------- */
+
+  // The passcode is enforced by row-level security in Postgres: every request
+  // carries it as a header, and without it the API returns nothing. What is
+  // kept here is only a convenience so the code is typed once per device.
+  function storedCode() {
+    try { return localStorage.getItem(PASS_KEY) || ""; } catch (e) { return ""; }
+  }
+
+  function rememberCode(code) {
+    try { localStorage.setItem(PASS_KEY, code); } catch (e) {}
+  }
+
+  function forgetCode() {
+    try { localStorage.removeItem(PASS_KEY); } catch (e) {}
+  }
+
+  function makeClient(code) {
+    return window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY, {
+      db: { schema: "library" },
+      auth: { persistSession: false },
+      global: { headers: code ? { "x-library-pass": code } : {} }
+    });
+  }
+
+  function gateShell(title, blurb) {
+    document.body.classList.add("locked");
+    var old = document.querySelector(".gate");
+    if (old) old.remove();
+
+    var gate = el("div", "gate");
+    var card = el("div", "gate-card");
+    card.appendChild(el("h1", "gate-mark", "Book Stack"));
+    card.appendChild(el("h2", null, title));
+    card.appendChild(el("p", "a", blurb));
+    gate.appendChild(card);
+    document.body.appendChild(gate);
+    return card;
+  }
+
+  function unlocked(code, start) {
+    rememberCode(code);
+    BP.db = makeClient(code);
+    var gate = document.querySelector(".gate");
+    if (gate) gate.remove();
+    document.body.classList.remove("locked");
+    start();
+  }
+
+  function showUnlock(start, message) {
+    var card = gateShell("Enter the passcode",
+      message || "This shelf is shared. Ask whoever set it up for the passcode.");
+
+    var form = el("form", "gate-form");
+    var input = document.createElement("input");
+    input.type = "password";
+    input.className = "field";
+    input.id = "passcode";
+    input.autocomplete = "current-password";
+    input.placeholder = "Passcode";
+    input.setAttribute("aria-label", "Library passcode");
+    var go = el("button", "btn primary", "Unlock");
+    go.type = "submit";
+    form.append(input, go);
+
+    var note = el("p", "gate-note");
+    form.onsubmit = function (e) {
+      e.preventDefault();
+      var code = input.value;
+      if (!code) return;
+      go.disabled = true;
+      note.textContent = "Checking…";
+      makeClient(null).rpc("check_passcode", { p_code: code }).then(function (res) {
+        go.disabled = false;
+        if (res.error) { note.textContent = "Could not reach the library. Try again."; return; }
+        if (res.data !== true) {
+          note.textContent = "That passcode is not right.";
+          input.select();
+          return;
+        }
+        unlocked(code, start);
+      });
+    };
+
+    card.append(form, note);
+    input.focus();
+  }
+
+  function showSetup(start) {
+    var card = gateShell("Set the passcode",
+      "Nobody has claimed this shelf yet. Pick a passcode now — everyone who borrows books will type it once on their own device.");
+
+    var form = el("form", "gate-form");
+    var one = document.createElement("input");
+    one.type = "password";
+    one.className = "field";
+    one.id = "passcode-new";
+    one.autocomplete = "new-password";
+    one.placeholder = "New passcode";
+    one.setAttribute("aria-label", "New passcode");
+    var two = document.createElement("input");
+    two.type = "password";
+    two.className = "field";
+    two.id = "passcode-again";
+    two.autocomplete = "new-password";
+    two.placeholder = "Type it again";
+    two.setAttribute("aria-label", "Repeat the new passcode");
+    var go = el("button", "btn primary", "Lock the shelf");
+    go.type = "submit";
+    form.append(one, two, go);
+
+    var note = el("p", "gate-note", "At least 6 characters. There is no way to recover it — write it down.");
+    form.onsubmit = function (e) {
+      e.preventDefault();
+      if (one.value.length < 6) { note.textContent = "Make it at least 6 characters."; return; }
+      if (one.value !== two.value) { note.textContent = "Those two do not match."; two.select(); return; }
+      go.disabled = true;
+      note.textContent = "Setting it…";
+      makeClient(null).rpc("set_passcode", { p_code: one.value }).then(function (res) {
+        go.disabled = false;
+        if (res.error) {
+          note.textContent = /already set/i.test(res.error.message || "")
+            ? "Someone just set a passcode. Reload and type it in."
+            : "Could not set the passcode. Try again.";
+          return;
+        }
+        unlocked(one.value, start);
+      });
+    };
+
+    card.append(form, note);
+    one.focus();
+  }
+
+  // Runs `start` once the page is allowed to talk to the catalogue.
+  function ready(start) {
+    makeClient(null).from("lock_state").select("locked").single().then(function (res) {
+      if (res.error) {
+        var offline = storedCode();
+        if (offline) { BP.db = makeClient(offline); start(); return; }
+        showUnlock(start, "The library did not answer. Check your connection, then try your passcode.");
+        return;
+      }
+      if (!res.data.locked) return showSetup(start);
+
+      var saved = storedCode();
+      if (!saved) return showUnlock(start);
+
+      makeClient(null).rpc("check_passcode", { p_code: saved }).then(function (check) {
+        if (check.error) { BP.db = makeClient(saved); start(); return; }
+        if (check.data === true) { BP.db = makeClient(saved); start(); return; }
+        forgetCode();
+        showUnlock(start, "The passcode changed. Ask for the new one.");
+      });
+    });
+  }
+
+  function lockDevice() {
+    forgetCode();
+    location.reload();
   }
 
   /* ---------- ISBN ---------- */
@@ -170,12 +333,31 @@ window.BP = (function () {
     return next();
   }
 
+  // Open Library frequently omits audience wording that Google Books carries in
+  // its categories, so an inconclusive band is worth a second opinion.
+  function bandFor(hit, isbn) {
+    var band = inferBand(hit);
+    if (band !== "Adult" && band !== "Unknown") return Promise.resolve(band);
+    if (hit.source === "Google Books") return Promise.resolve(band);
+    return fromGoogleBooks(isbn).catch(function () { return null; }).then(function (g) {
+      if (!g) return band;
+      var second = inferBand({
+        subjects: (hit.subjects || "") + "; " + (g.subjects || ""),
+        audience: g.audience || ""
+      });
+      return second === "Unknown" ? band : second;
+    });
+  }
+
   // Resolves a pending book row and writes what it found back to the catalogue.
   function resolve(isbn, keepBand) {
     return lookup(isbn).then(function (hit) {
-      var patch;
-      if (hit) {
-        patch = {
+      if (!hit) {
+        return BP.db.from("books").update({ lookup_state: "missing" })
+          .eq("isbn13", isbn).select().single();
+      }
+      return (keepBand ? Promise.resolve(null) : bandFor(hit, isbn)).then(function (band) {
+        var patch = {
           title: hit.title || "",
           authors: hit.authors || "",
           publisher: hit.publisher || "",
@@ -186,11 +368,9 @@ window.BP = (function () {
           source: hit.source || "",
           lookup_state: "ok"
         };
-        if (!keepBand) patch.grade_band = inferBand(hit);
-      } else {
-        patch = { lookup_state: "missing" };
-      }
-      return db.from("books").update(patch).eq("isbn13", isbn).select().single();
+        if (band) patch.grade_band = band;
+        return BP.db.from("books").update(patch).eq("isbn13", isbn).select().single();
+      });
     });
   }
 
@@ -202,8 +382,7 @@ window.BP = (function () {
   }
 
   function daysUntil(iso) {
-    var ms = new Date(iso).getTime() - Date.now();
-    return Math.ceil(ms / 86400000);
+    return Math.ceil((new Date(iso).getTime() - Date.now()) / 86400000);
   }
 
   function dueLabel(iso) {
@@ -214,16 +393,17 @@ window.BP = (function () {
     return "due in " + d + " days";
   }
 
-  return {
-    db: db,
-    BANDS: BANDS,
-    $: $, el: el, toast: toast,
-    normalizeISBN: normalizeISBN,
-    inferBand: inferBand,
-    lookup: lookup,
-    resolve: resolve,
-    dayStamp: dayStamp,
-    daysUntil: daysUntil,
-    dueLabel: dueLabel
-  };
+  BP.$ = $;
+  BP.el = el;
+  BP.toast = toast;
+  BP.ready = ready;
+  BP.lockDevice = lockDevice;
+  BP.normalizeISBN = normalizeISBN;
+  BP.inferBand = inferBand;
+  BP.lookup = lookup;
+  BP.resolve = resolve;
+  BP.dayStamp = dayStamp;
+  BP.daysUntil = daysUntil;
+  BP.dueLabel = dueLabel;
+  return BP;
 })();

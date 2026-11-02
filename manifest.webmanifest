@@ -1,6 +1,6 @@
 {
-  "name": "Book Pile",
-  "short_name": "Book Pile",
+  "name": "Book Stack",
+  "short_name": "Book Stack",
   "description": "Scan book barcodes and build an exportable inventory.",
   "start_url": "./",
   "scope": "./",

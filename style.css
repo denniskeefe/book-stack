@@ -292,3 +292,30 @@ ul.books li.open { background: var(--panel-2); }
 }
 .toast.bad { background: var(--bad); color: #fff; }
 footer { color: var(--muted); font-size: 12px; text-align: center; padding-block: 8px 0; }
+
+/* Passcode gate: replaces the whole page until the shelf is unlocked. */
+body.locked > header, body.locked > main { display: none; }
+.gate {
+  min-height: 78vh;
+  display: grid;
+  place-content: center;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+  padding-block: 40px;
+}
+.gate-card {
+  width: min(420px, 100%);
+  display: grid;
+  gap: 10px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--r);
+  box-shadow: var(--shadow);
+  padding: 24px;
+}
+.gate-mark { margin: 0 0 6px; font: 700 26px/1 var(--display); letter-spacing: -.01em; }
+.gate-card h2 { margin: 0; font: 600 17px/1.3 var(--sans); }
+.gate-card .a { margin: 0; font-size: 14px; color: var(--muted); }
+.gate-form { display: grid; gap: 8px; margin-top: 6px; }
+.gate-form .field { width: 100%; }
+.gate-note { margin: 0; font-size: 13px; color: var(--muted); min-height: 19px; }

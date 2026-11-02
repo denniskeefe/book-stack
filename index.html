@@ -5,10 +5,10 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="description" content="Scan book barcodes with your phone camera and add them to the shared library.">
 <meta name="apple-mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-title" content="Book Pile">
+<meta name="apple-mobile-web-app-title" content="Book Stack">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="theme-color" content="#0d1214">
-<title>Book Pile</title>
+<title>Book Stack</title>
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" href="favicon.png" sizes="32x32">
 <link rel="apple-touch-icon" href="apple-touch-icon.png">
@@ -22,7 +22,7 @@
 <header>
   <div class="wrap">
     <div class="bar">
-      <h1 class="wordmark">Book&nbsp;<span>Pile</span></h1>
+      <h1 class="wordmark">Book&nbsp;<span>Stack</span></h1>
       <div class="tally"><b id="tally-copies">—</b> copies · <b id="tally-titles">—</b> titles</div>
     </div>
     <nav class="tabs">
@@ -71,18 +71,18 @@
     <div class="empty" id="recent-empty"><strong>Nothing scanned yet</strong>Each book lands here as it is added to the shared library.</div>
   </div>
 
-  <footer>Books are saved to the shared library, so every device sees the same shelf.</footer>
+  <footer>Books are saved to the shared library, so every device sees the same shelf. <button class="btn small quiet" id="lock" type="button">Lock this device</button></footer>
 </main>
 
 <script src="https://cdn.jsdelivr.net/npm/@zxing/library@0.21.3/umd/index.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.118.0/dist/umd/supabase.js"></script>
 <script src="app.js"></script>
 <script>
-(function () {
+BP.ready(function () {
   "use strict";
 
   var $ = BP.$, el = BP.el, db = BP.db;
-  var QUEUE_KEY = "bookpile.queue";
+  var QUEUE_KEY = "bookstack.queue";
 
   var rows = {};          // isbn -> catalogue row
   var recent = [];        // isbns, newest first
@@ -463,7 +463,10 @@
   }
   refreshTally();
   flushQueue();
-})();
+});
+</script>
+<script>
+document.getElementById("lock").onclick = function () { BP.lockDevice(); };
 </script>
 </body>
 </html>

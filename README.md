@@ -1,4 +1,4 @@
-# Book Pile
+# Book Stack
 
 Two pages for running a small shared library. **Scan** adds books to the shelf with a phone
 camera; **Library** shows what's on the shelf, what reading level it is, and who has what out.
