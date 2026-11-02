@@ -1,0 +1,9 @@
+{
+  "name": "Book Pile",
+  "short_name": "Book Pile",
+  "start_url": "./",
+  "display": "standalone",
+  "background_color": "#0d1214",
+  "theme_color": "#0d1214",
+  "icons": []
+}
