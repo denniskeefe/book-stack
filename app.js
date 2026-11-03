@@ -407,6 +407,14 @@ window.BP = (function () {
     });
   }
 
+  // A band counts as chosen only when someone picked a real one. "Unknown"
+  // records the absence of a choice rather than a choice, so a hand-set
+  // "Unknown" stays eligible for a later lookup to fill in.
+  function bandChosen(book) {
+    return book.grade_band_source === "manual" &&
+      !!book.grade_band && book.grade_band !== "Unknown";
+  }
+
   // Resolves a pending book row and writes what it found back to the catalogue.
   function resolve(isbn, keepBand) {
     return lookup(isbn).then(function (hit) {
@@ -426,7 +434,10 @@ window.BP = (function () {
           source: hit.source || "",
           lookup_state: "ok"
         };
-        if (band) patch.grade_band = band;
+        if (band) {
+          patch.grade_band = band;
+          patch.grade_band_source = "auto";
+        }
         return BP.db.from("books").update(patch).eq("isbn13", isbn).select().single();
       });
     });
@@ -467,6 +478,7 @@ window.BP = (function () {
   BP.inferBand = inferBand;
   BP.lookup = lookup;
   BP.resolve = resolve;
+  BP.bandChosen = bandChosen;
   BP.dayStamp = dayStamp;
   BP.daysUntil = daysUntil;
   BP.dueLabel = dueLabel;

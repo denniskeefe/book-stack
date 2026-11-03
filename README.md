@@ -19,8 +19,10 @@ camera; **Library** shows what's on the shelf, what reading level it is, and who
   that matches nothing is still recorded by ISBN and can be retried from the shelf.
 - **Reading level** is a grade band: K-2, 3-5, 6-8, 9-12, Adult. No free catalogue publishes
   a reading level, so the band is inferred from the audience and subject wording the lookup
-  APIs do return, then left editable — changing it marks the band as set by hand so a later
-  lookup will not overwrite it.
+  APIs do return, then left editable — choosing a band marks it as set by hand so a later
+  lookup will not overwrite it. `Unknown` is not a choice: a title left without a band stays
+  eligible for **Retry lookups**, which re-runs the lookup for anything that failed or that
+  came back with no level.
 - **Checkout** is roster-based: readers are added by name, and a book is lent by tapping a
   name and a loan length. There are no accounts and no passwords.
 - **Storage** is Postgres on Supabase, in a `library` schema. Scans made while offline are

@@ -63,7 +63,7 @@
       <div class="empty" id="shelf-empty" hidden><strong>Nothing here yet</strong>Scan a barcode and the book shows up on this shelf.</div>
       <div class="tools" style="border-top:1px solid var(--line)">
         <button class="btn small" id="export-csv">Download CSV</button>
-        <button class="btn small" id="retry-missing" hidden>Retry failed lookups</button>
+        <button class="btn small" id="retry-missing" hidden>Retry lookups</button>
       </div>
     </div>
   </section>
@@ -343,7 +343,7 @@ BP.ready(function () {
       $("shelf-empty").innerHTML = "<strong>Nothing here yet</strong>Scan a barcode and the book shows up on this shelf.";
     }
     $("shelf-count").textContent = shown.length + (shown.length === 1 ? " title" : " titles");
-    $("retry-missing").hidden = !books.some(function (b) { return b.lookup_state === "missing"; });
+    $("retry-missing").hidden = !books.some(needsRetry);
   }
 
   function renderReaders() {
@@ -609,12 +609,18 @@ BP.ready(function () {
     setTimeout(function () { URL.revokeObjectURL(url); }, 2000);
   };
 
+  // Worth another pass: a lookup that failed outright, and one that came back
+  // without a level, since neither has anything to lose by asking again.
+  function needsRetry(b) {
+    return b.lookup_state === "missing" || !b.grade_band || b.grade_band === "Unknown";
+  }
+
   $("retry-missing").onclick = function () {
-    var stuck = books.filter(function (b) { return b.lookup_state === "missing"; });
+    var stuck = books.filter(needsRetry);
     if (!stuck.length) return;
     BP.toast("Retrying " + stuck.length + "…");
     Promise.all(stuck.map(function (b) {
-      return BP.resolve(b.isbn13, b.grade_band_source === "manual").catch(function () {});
+      return BP.resolve(b.isbn13, BP.bandChosen(b)).catch(function () {});
     })).then(loadAll);
   };
 
