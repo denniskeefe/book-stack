@@ -283,6 +283,10 @@ window.BP = (function () {
   // Returns a 13-digit ISBN, or "" when the code is not a book.
   function normalizeISBN(raw) {
     var s = String(raw).replace(/[^0-9Xx]/g, "").toUpperCase();
+    // Books carry a 2- or 5-digit supplement beside the ISBN for the price, and
+    // some decoders hand it back joined to the main code. The supplement is not
+    // part of the ISBN, so it is trimmed before the check digit is tested.
+    if ((s.length === 15 || s.length === 18) && /^97[89]/.test(s)) s = s.slice(0, 13);
     if (s.length === 10 && valid10(s)) {
       var core = "978" + s.slice(0, 9);
       return core + checkDigit13(core);

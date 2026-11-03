@@ -91,7 +91,9 @@ BP.ready(function () {
   var stream = null, track = null, timer = null, wakeLock = null;
   var detector = null, zxing = null;
   var facing = "environment";
-  var lastCode = "", lastCodeAt = 0;
+  var lastCode = "", lastSeenAt = 0;
+  var SCAN_COOLDOWN = 2500;
+  var adding = {};        // isbn -> in-flight add, so one book is one request
   var audioCtx = null;
 
   /* ---------- offline queue ---------- */
@@ -165,10 +167,37 @@ BP.ready(function () {
     });
   }
 
+  // One book is one request. A second call for the same ISBN joins the one
+  // already in flight rather than starting another, so the camera and the typed
+  // form cannot both add the same copy.
   function addISBN(isbn, viaCamera, quiet) {
+    // Any add at all — scanned, typed, or sent on from the offline queue —
+    // starts the camera's cooldown, so a book still sitting in the frame is
+    // not counted a second time by the decoder.
+    lastCode = isbn;
+    lastSeenAt = Date.now();
+    if (adding[isbn]) return adding[isbn];
+    var run = addOnce(isbn, viaCamera, quiet);
+    adding[isbn] = run;
+    return run.then(function () { delete adding[isbn]; },
+      function () { delete adding[isbn]; });
+  }
+
+  function addOnce(isbn, viaCamera, quiet) {
+    // Only a failure of the add itself is worth queueing. Anything that goes
+    // wrong afterwards — the catalogue lookup, say — must not re-send a copy
+    // the shelf has already recorded.
     return db.rpc("add_copy", { p_isbn: isbn }).then(function (res) {
       if (res.error) throw res.error;
-      var book = res.data;
+      return res.data;
+    }).catch(function (err) {
+      enqueue(isbn);
+      beep("bad");
+      BP.toast("Offline — scan saved and will be sent later", true);
+      console.warn("add_copy failed", err);
+      return null;
+    }).then(function (book) {
+      if (!book) return;
       rows[isbn] = book;
       bumpRecent(isbn);
       render();
@@ -189,13 +218,10 @@ BP.ready(function () {
       if (book.lookup_state === "pending") {
         return BP.resolve(isbn, false).then(function (out) {
           if (out && out.data) { rows[isbn] = out.data; render(); }
+        }).catch(function (err) {
+          console.warn("lookup failed", err);
         });
       }
-    }).catch(function (err) {
-      enqueue(isbn);
-      beep("bad");
-      BP.toast("Offline — scan saved and will be sent later", true);
-      console.warn("add_copy failed", err);
     });
   }
 
@@ -205,13 +231,21 @@ BP.ready(function () {
     recent = recent.slice(0, 10);
   }
 
+  // A barcode sitting in the frame is decoded several times a second, so the
+  // cooldown runs from the last time a code was SEEN rather than from when it
+  // was added: a book held still, which is what anyone does while reading the
+  // toast, stays one entry however long it is held. The comparison is on the
+  // ISBN rather than the raw text, because the same book reads differently
+  // when the decoder picks up the price code printed beside it.
   function handleCode(raw) {
     var now = Date.now();
-    if (raw === lastCode && now - lastCodeAt < 2500) return;
-    lastCode = raw;
-    lastCodeAt = now;
-
     var isbn = BP.normalizeISBN(raw);
+    var code = isbn || raw;
+    var repeat = code === lastCode && now - lastSeenAt < SCAN_COOLDOWN;
+    lastCode = code;
+    lastSeenAt = now;
+    if (repeat) return;
+
     if (!isbn) {
       beep("bad");
       buzz([60, 40, 60]);

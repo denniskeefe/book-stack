@@ -15,6 +15,13 @@ camera; **Library** shows what's on the shelf, what reading level it is, and who
 - **Scanning** uses the browser's native `BarcodeDetector` where it exists (Chrome, Android)
   and falls back to [ZXing](https://github.com/zxing-js/library) everywhere else, including
   iOS Safari. Frames are cropped to the reticle before decoding to keep the loop fast.
+- **One scan is one copy.** A barcode in the frame is decoded several times a second, so a
+  cooldown runs from the last time a code was *seen* rather than from when it was added: a
+  book held still stays one entry however long it is held, and the next book is still picked
+  up at once. To add a second copy of the same title, take it out of the frame and show it
+  again. The cooldown compares ISBNs rather than raw barcode text, since the same book reads
+  differently when the decoder picks up the price code printed beside it, and every add path
+  — scanned, typed, or sent on from the offline queue — starts it.
 - **Lookup** tries Open Library's books API, then its search API, then Google Books. A book
   that matches nothing is still recorded by ISBN and can be retried from the shelf.
 - **Covers** are resolved separately from the metadata, because the endpoint that knows a
