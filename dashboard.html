@@ -115,7 +115,7 @@ BP.ready(function () {
       BP.isAdmin()
         ? db.from("readers").select("*").order("name")
         : db.from("readers").select("*").eq("active", true).order("name"),
-      db.from("loans").select("*, books(title, authors, cover_url), readers(name)").is("returned_at", null).order("due_at")
+      db.from("loans").select("*, books(isbn13, title, authors, cover_url), readers(name)").is("returned_at", null).order("due_at")
     ]).then(function (res) {
       var bad = res.find(function (r) { return r.error; });
       if (bad) throw bad.error;
@@ -139,18 +139,7 @@ BP.ready(function () {
 
   /* ---------- rendering ---------- */
 
-  function coverNode(book) {
-    if (book.cover_url) {
-      var img = document.createElement("img");
-      img.className = "cover";
-      img.src = book.cover_url;
-      img.alt = "";
-      img.loading = "lazy";
-      img.onerror = function () { img.replaceWith(el("div", "cover", "no\ncover")); };
-      return img;
-    }
-    return el("div", "cover", book.lookup_state === "pending" ? "…" : "no\ncover");
-  }
+  var coverNode = BP.coverNode;
 
   function titleNode(book) {
     var t = el("div", "t");
@@ -612,7 +601,8 @@ BP.ready(function () {
   // Worth another pass: a lookup that failed outright, and one that came back
   // without a level, since neither has anything to lose by asking again.
   function needsRetry(b) {
-    return b.lookup_state === "missing" || !b.grade_band || b.grade_band === "Unknown";
+    return b.lookup_state === "missing" || !b.grade_band ||
+      b.grade_band === "Unknown" || !b.cover_url;
   }
 
   $("retry-missing").onclick = function () {

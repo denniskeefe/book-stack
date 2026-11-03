@@ -17,14 +17,24 @@ camera; **Library** shows what's on the shelf, what reading level it is, and who
   iOS Safari. Frames are cropped to the reticle before decoding to keep the loop fast.
 - **Lookup** tries Open Library's books API, then its search API, then Google Books. A book
   that matches nothing is still recorded by ISBN and can be retried from the shelf.
+- **Covers** are resolved separately from the metadata, because the endpoint that knows a
+  title does not always carry its picture. Open Library is asked by ISBN as well, each
+  candidate image is loaded before it is kept, and a title with no cover anywhere gets a
+  drawn tile: its initials on a colour taken from the ISBN. Every book shows a thumbnail.
 - **Reading level** is a grade band: K-2, 3-5, 6-8, 9-12, Adult. No free catalogue publishes
   a reading level, so the band is inferred from the audience and subject wording the lookup
   APIs do return, then left editable — choosing a band marks it as set by hand so a later
   lookup will not overwrite it. `Unknown` is not a choice: a title left without a band stays
-  eligible for **Retry lookups**, which re-runs the lookup for anything that failed or that
-  came back with no level.
+  eligible for **Retry lookups**, which re-runs the lookup for anything that failed or
+  that came back with no level and no cover.
 - **Checkout** is roster-based: readers are added by name, and a book is lent by tapping a
   name and a loan length. There are no accounts and no passwords.
+- **Google Books API key** is optional and set as `GOOGLE_BOOKS_KEY` at the top of
+  `app.js`. Keyless requests share one daily quota across every anonymous caller, so the
+  API answers `429` for a shelf that has made no requests of its own, and Google Books is
+  effectively a dead fallback without a key. Get one from the Google Cloud console with
+  the Books API enabled, and restrict it by HTTP referrer to this site: the key ships in
+  page source, so the referrer restriction is what keeps it yours.
 - **Storage** is Postgres on Supabase, in a `library` schema. Scans made while offline are
   queued in `localStorage` and sent when the connection returns.
 

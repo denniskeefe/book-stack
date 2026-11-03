@@ -6,6 +6,13 @@ window.BP = (function () {
   var SUPABASE_KEY = "sb_publishable_oIl-you4RLtgi5fJx7auBw_VvDbZ5Mi";
   var PASS_KEY = "bookstack.pass";
 
+  // Keyless Google Books requests share one pooled daily quota across every
+  // anonymous caller, and that pool is routinely exhausted, so the API answers
+  // 429 for a shelf that has made no requests of its own. A key of your own
+  // carries its own quota. Leave this empty to go on sharing the pool; the
+  // lookup still works without it, with Google Books as a dead fallback.
+  var GOOGLE_BOOKS_KEY = "";
+
   var BANDS = ["K-2", "3-5", "6-8", "9-12", "Adult", "Unknown"];
 
   var BP = {
@@ -357,8 +364,20 @@ window.BP = (function () {
       });
   }
 
+  // Google Books is consulted for the metadata, for a band and for a cover, so
+  // the answer is kept per ISBN to keep one scan to one request.
+  var googleSeen = {};
+  function googleFor(isbn) {
+    if (!googleSeen[isbn]) {
+      googleSeen[isbn] = fromGoogleBooks(isbn).catch(function () { return null; });
+    }
+    return googleSeen[isbn];
+  }
+
   function fromGoogleBooks(isbn) {
-    return fetch("https://www.googleapis.com/books/v1/volumes?q=isbn:" + isbn)
+    var url = "https://www.googleapis.com/books/v1/volumes?q=isbn:" + isbn +
+      (GOOGLE_BOOKS_KEY ? "&key=" + encodeURIComponent(GOOGLE_BOOKS_KEY) : "");
+    return fetch(url)
       .then(function (r) { return r.json(); })
       .then(function (data) {
         var item = data && data.items && data.items[0];
@@ -380,7 +399,7 @@ window.BP = (function () {
   }
 
   function lookup(isbn) {
-    var sources = [fromOpenLibrary, fromOpenLibrarySearch, fromGoogleBooks];
+    var sources = [fromOpenLibrary, fromOpenLibrarySearch, googleFor];
     var i = 0;
     function next() {
       if (i >= sources.length) return Promise.resolve(null);
@@ -397,7 +416,7 @@ window.BP = (function () {
     var band = inferBand(hit);
     if (band !== "Adult" && band !== "Unknown") return Promise.resolve(band);
     if (hit.source === "Google Books") return Promise.resolve(band);
-    return fromGoogleBooks(isbn).catch(function () { return null; }).then(function (g) {
+    return googleFor(isbn).then(function (g) {
       if (!g) return band;
       var second = inferBand({
         subjects: (hit.subjects || "") + "; " + (g.subjects || ""),
@@ -405,6 +424,108 @@ window.BP = (function () {
       });
       return second === "Unknown" ? band : second;
     });
+  }
+
+  /* ---------- covers ---------- */
+
+  // The endpoint that knows a title does not always carry its picture: Open
+  // Library's book API reported no cover for a title whose cover its own image
+  // endpoint serves perfectly well. So a cover is resolved separately from the
+  // metadata, by probing candidates and keeping the first that really loads.
+  function imageLoads(url) {
+    return new Promise(function (settle) {
+      var img = new Image();
+      var done = false;
+      function finish(ok) {
+        if (done) return;
+        done = true;
+        img.onload = img.onerror = null;
+        settle(ok);
+      }
+      // Asked without default=false, Open Library answers a missing cover with
+      // a 1px placeholder that loads successfully, so size is checked too.
+      img.onload = function () { finish(img.naturalWidth > 2 && img.naturalHeight > 2); };
+      img.onerror = function () { finish(false); };
+      setTimeout(function () { finish(false); }, 5000);
+      img.src = url;
+    });
+  }
+
+  function firstThatLoads(urls) {
+    var seen = {};
+    var list = urls.filter(function (u) {
+      if (!u || seen[u]) return false;
+      seen[u] = true;
+      return true;
+    });
+    function next(i) {
+      if (i >= list.length) return Promise.resolve("");
+      return imageLoads(list[i]).then(function (ok) {
+        return ok ? list[i] : next(i + 1);
+      });
+    }
+    return next(0);
+  }
+
+  // Open Library is asked by ISBN as well as by whatever the metadata gave,
+  // and Google Books is consulted only if neither produced an image.
+  function coverFor(hit, isbn) {
+    var tries = [];
+    if (hit && hit.cover_url) tries.push(hit.cover_url);
+    // -M is about 180px wide, which is what a 44px thumbnail wants even on a
+    // 3x screen; -L is only worth asking for if the medium size is missing.
+    tries.push("https://covers.openlibrary.org/b/isbn/" + isbn + "-M.jpg?default=false");
+    tries.push("https://covers.openlibrary.org/b/isbn/" + isbn + "-L.jpg?default=false");
+    return firstThatLoads(tries).then(function (found) {
+      if (found) return found;
+      return googleFor(isbn).then(function (g) {
+        if (!g || !g.cover_url) return "";
+        return imageLoads(g.cover_url).then(function (ok) {
+          return ok ? g.cover_url : "";
+        });
+      });
+    });
+  }
+
+  // Initials stand in for a cover, so the words that carry the title are the
+  // ones worth showing.
+  function initialsOf(title) {
+    var skip = { a: 1, an: 1, the: 1, of: 1, and: 1, to: 1, in: 1, on: 1 };
+    var words = String(title || "").split(/[^A-Za-z0-9]+/).filter(function (w) {
+      return w && !skip[w.toLowerCase()];
+    });
+    return words.slice(0, 3).map(function (w) {
+      return w.charAt(0).toUpperCase();
+    }).join("");
+  }
+
+  // Not every book has a cover anywhere, so one is drawn instead: the title's
+  // initials on a colour derived from the ISBN, which keeps a given book
+  // looking the same on every device and in every list it appears in.
+  function coverTile(book) {
+    var isbn = String(book.isbn13 || "");
+    var hue = 0;
+    for (var i = 0; i < isbn.length; i++) {
+      hue = (hue * 31 + isbn.charCodeAt(i)) % 360;
+    }
+    var node = el("div", "cover blank", initialsOf(book.title) || "?");
+    node.style.setProperty("--tile-h", hue);
+    return node;
+  }
+
+  // Both pages show the same thumbnail: the real cover where there is one, a
+  // drawn tile where there is not, and the tile again if the image 404s later.
+  function coverNode(book) {
+    if (!book.cover_url) {
+      return book.lookup_state === "pending" ? el("div", "cover", "\u2026") : coverTile(book);
+    }
+    var img = document.createElement("img");
+    img.className = "cover";
+    img.src = book.cover_url;
+    img.alt = "";
+    img.loading = "lazy";
+    img.onerror = function () { img.replaceWith(coverTile(book)); };
+    return img;
   }
 
   // A band counts as chosen only when someone picked a real one. "Unknown"
@@ -422,7 +543,11 @@ window.BP = (function () {
         return BP.db.from("books").update({ lookup_state: "missing" })
           .eq("isbn13", isbn).select().single();
       }
-      return (keepBand ? Promise.resolve(null) : bandFor(hit, isbn)).then(function (band) {
+      return Promise.all([
+        keepBand ? Promise.resolve(null) : bandFor(hit, isbn),
+        coverFor(hit, isbn)
+      ]).then(function (out) {
+        var band = out[0];
         var patch = {
           title: hit.title || "",
           authors: hit.authors || "",
@@ -430,7 +555,7 @@ window.BP = (function () {
           year: hit.year || "",
           pages: hit.pages,
           subjects: hit.subjects || "",
-          cover_url: hit.cover_url || "",
+          cover_url: out[1],
           source: hit.source || "",
           lookup_state: "ok"
         };
@@ -479,6 +604,8 @@ window.BP = (function () {
   BP.lookup = lookup;
   BP.resolve = resolve;
   BP.bandChosen = bandChosen;
+  BP.coverFor = coverFor;
+  BP.coverNode = coverNode;
   BP.dayStamp = dayStamp;
   BP.daysUntil = daysUntil;
   BP.dueLabel = dueLabel;

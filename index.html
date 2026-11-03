@@ -223,22 +223,7 @@ BP.ready(function () {
 
   /* ---------- rendering ---------- */
 
-  function coverNode(book) {
-    if (book.cover_url) {
-      var img = document.createElement("img");
-      img.className = "cover";
-      img.src = book.cover_url;
-      img.alt = "";
-      img.loading = "lazy";
-      img.onerror = function () { img.replaceWith(blankCover(book)); };
-      return img;
-    }
-    return blankCover(book);
-  }
-
-  function blankCover(book) {
-    return el("div", "cover", book.lookup_state === "pending" ? "…" : "no\ncover");
-  }
+  var coverNode = BP.coverNode;
 
   function render() {
     var list = $("recent");

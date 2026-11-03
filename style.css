@@ -213,6 +213,16 @@ ul.books li.open { background: var(--panel-2); }
   font: 500 10px/1.2 var(--mono); color: var(--muted);
   overflow: hidden; text-align: center; white-space: pre-line;
 }
+/* A title with no cover anywhere still gets a thumbnail: its initials on a hue
+   taken from the ISBN. The tile carries its own background, so it reads the
+   same in both themes. */
+.cover.blank {
+  background: hsl(var(--tile-h, 203) 30% 34%);
+  color: rgba(255, 255, 255, .92);
+  font: 600 13px/1 var(--sans);
+  letter-spacing: .04em;
+  white-space: nowrap;
+}
 .meta { min-width: 0; }
 .meta .t { font-weight: 600; line-height: 1.25; overflow-wrap: anywhere; }
 .meta .a { font-size: 13px; color: var(--muted); overflow-wrap: anywhere; }
