@@ -10,7 +10,8 @@ window.BP = (function () {
 
   var BP = {
     BANDS: BANDS,
-    db: null
+    db: null,
+    adminSet: false
   };
 
   /* ---------- small DOM helpers ---------- */
@@ -55,11 +56,14 @@ window.BP = (function () {
     try { localStorage.removeItem(PASS_KEY); } catch (e) {}
   }
 
-  function makeClient(code) {
+  function makeClient(code, admin) {
+    var headers = {};
+    if (code) headers["x-library-pass"] = code;
+    if (admin) headers["x-library-admin"] = admin;
     return window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY, {
       db: { schema: "library" },
       auth: { persistSession: false },
-      global: { headers: code ? { "x-library-pass": code } : {} }
+      global: { headers: headers }
     });
   }
 
@@ -174,7 +178,8 @@ window.BP = (function () {
 
   // Runs `start` once the page is allowed to talk to the catalogue.
   function ready(start) {
-    makeClient(null).from("lock_state").select("locked").single().then(function (res) {
+    makeClient(null).from("lock_state").select("locked, admin_set").single().then(function (res) {
+      if (!res.error) BP.adminSet = res.data.admin_set === true;
       if (res.error) {
         var offline = storedCode();
         if (offline) { BP.db = makeClient(offline); start(); return; }
@@ -197,7 +202,60 @@ window.BP = (function () {
 
   function lockDevice() {
     forgetCode();
+    leaveAdmin();
     location.reload();
+  }
+
+  /* ---------- admin ---------- */
+
+  // A second credential. The shelf passcode permits reading, adding and
+  // editing; only the admin password permits a delete, and Postgres enforces
+  // that through the delete policies on books, readers and loans. It is kept in
+  // sessionStorage rather than localStorage, so admin rights end with the tab
+  // instead of lingering on a shared device.
+  var ADMIN_KEY = "bookstack.admin";
+  var adminDb = null;
+
+  function adminCode() {
+    try { return sessionStorage.getItem(ADMIN_KEY) || ""; } catch (e) { return ""; }
+  }
+
+  function isAdmin() { return !!adminCode(); }
+
+  function enterAdmin(code) {
+    try { sessionStorage.setItem(ADMIN_KEY, code); } catch (e) {}
+    adminDb = null;
+  }
+
+  function leaveAdmin() {
+    try { sessionStorage.removeItem(ADMIN_KEY); } catch (e) {}
+    adminDb = null;
+  }
+
+  // A delete needs both headers: the admin password to satisfy the delete
+  // policy, and the shelf passcode for the row to be visible to the request at
+  // all. Returns null when this tab is not in admin mode.
+  function adminClient() {
+    if (!isAdmin()) return null;
+    if (!adminDb) adminDb = makeClient(storedCode(), adminCode());
+    return adminDb;
+  }
+
+  function adminState() {
+    return makeClient(null).from("lock_state").select("locked, admin_set").single();
+  }
+
+  function checkAdmin(code) {
+    return makeClient(null).rpc("check_admin", { p_code: code });
+  }
+
+  // Setting or changing the admin password requires the shelf passcode, which
+  // travels as a header; changing it also requires the current one.
+  function setAdminPass(code, current) {
+    return makeClient(storedCode()).rpc("set_admin_passcode", {
+      p_code: code,
+      p_current: current || null
+    });
   }
 
   /* ---------- ISBN ---------- */
@@ -398,6 +456,13 @@ window.BP = (function () {
   BP.toast = toast;
   BP.ready = ready;
   BP.lockDevice = lockDevice;
+  BP.isAdmin = isAdmin;
+  BP.enterAdmin = enterAdmin;
+  BP.leaveAdmin = leaveAdmin;
+  BP.adminClient = adminClient;
+  BP.adminState = adminState;
+  BP.checkAdmin = checkAdmin;
+  BP.setAdminPass = setAdminPass;
   BP.normalizeISBN = normalizeISBN;
   BP.inferBand = inferBand;
   BP.lookup = lookup;

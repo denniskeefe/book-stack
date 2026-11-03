@@ -30,11 +30,19 @@
       <button class="tab" id="tab-shelf" aria-selected="true">Shelf</button>
       <button class="tab" id="tab-readers" aria-selected="false">Readers</button>
       <button class="tab" id="tab-out" aria-selected="false">Out</button>
+      <a class="tab" href="admin.html">Admin</a>
     </nav>
   </div>
 </header>
 
 <main class="wrap">
+  <div class="admin-bar" id="admin-bar" hidden>
+    <strong>Admin mode</strong>
+    <span class="a">Delete buttons are showing. This tab only.</span>
+    <div class="spacer"></div>
+    <button class="btn small quiet danger" id="admin-off" type="button">Leave</button>
+  </div>
+
   <div class="stats">
     <div class="stat"><b id="s-titles">—</b><span>Titles</span></div>
     <div class="stat"><b id="s-copies">—</b><span>Copies</span></div>
@@ -84,7 +92,7 @@
     </div>
   </section>
 
-  <footer>Everyone here shares one passcode. <button class="btn small quiet" id="lock" type="button">Lock this device</button></footer>
+  <footer>Everyone here shares one passcode. Deleting needs the <a href="admin.html">admin password</a>. <button class="btn small quiet" id="lock" type="button">Lock this device</button></footer>
 </main>
 
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.118.0/dist/umd/supabase.js"></script>
@@ -104,7 +112,9 @@ BP.ready(function () {
   function loadAll() {
     return Promise.all([
       db.from("catalog").select("*").order("added_at", { ascending: false }),
-      db.from("readers").select("*").eq("active", true).order("name"),
+      BP.isAdmin()
+        ? db.from("readers").select("*").order("name")
+        : db.from("readers").select("*").eq("active", true).order("name"),
       db.from("loans").select("*, books(title, authors, cover_url), readers(name)").is("returned_at", null).order("due_at")
     ]).then(function (res) {
       var bad = res.find(function (r) { return r.error; });
@@ -313,6 +323,13 @@ BP.ready(function () {
         renderShelf();
       };
       wrap.append(lend, actions);
+      if (BP.isAdmin()) {
+        wrap.appendChild(deleteButton("Delete", function (btn) {
+          adminDelete("books", "isbn13", book.isbn13).then(function (res) {
+            reportDelete(btn, book.title || book.isbn13, res, "A copy is still checked out.");
+          });
+        }));
+      }
       li.appendChild(wrap);
 
       if (openPanel === book.isbn13) li.appendChild(checkoutPanel(book));
@@ -346,24 +363,44 @@ BP.ready(function () {
       line.appendChild(el("span", "badge" + (mine.length ? " out" : ""),
         mine.length ? mine.length + " out" : "nothing out"));
       if (late.length) line.appendChild(el("span", "badge late", late.length + " overdue"));
+      if (!r.active) line.appendChild(el("span", "badge miss", "retired"));
       meta.appendChild(line);
       li.appendChild(meta);
 
-      var off = el("button", "btn small quiet danger", "Remove");
-      off.type = "button";
-      off.onclick = function () {
-        if (mine.length) { BP.toast(r.name + " still has " + mine.length + " book(s) out.", true); return; }
-        db.from("readers").update({ active: false }).eq("id", r.id).then(function (res) {
-          if (res.error) { BP.toast("Could not remove that reader.", true); return; }
-          BP.toast(r.name + " removed");
-          loadAll();
-        });
-      };
-      li.appendChild(off);
+      var hold = el("div");
+      hold.style.display = "grid";
+      hold.style.gap = "6px";
+      hold.style.justifyItems = "end";
+
+      if (r.active) {
+        var off = el("button", "btn small quiet danger", "Remove");
+        off.type = "button";
+        off.onclick = function () {
+          if (mine.length) { BP.toast(r.name + " still has " + mine.length + " book(s) out.", true); return; }
+          db.from("readers").update({ active: false }).eq("id", r.id).then(function (res) {
+            if (res.error) { BP.toast("Could not remove that reader.", true); return; }
+            BP.toast(r.name + " removed");
+            loadAll();
+          });
+        };
+        hold.appendChild(off);
+      }
+
+      if (BP.isAdmin()) {
+        hold.appendChild(deleteButton("Delete", function (btn) {
+          adminDelete("readers", "id", r.id).then(function (res) {
+            reportDelete(btn, r.name, res, r.name + " still has a book out.");
+          });
+        }));
+      }
+
+      li.appendChild(hold);
       list.appendChild(li);
     });
     $("readers-empty").hidden = readers.length > 0;
-    $("readers-count").textContent = readers.length + (readers.length === 1 ? " reader" : " readers");
+    var live = readers.filter(function (r) { return r.active; }).length;
+    $("readers-count").textContent = live + (live === 1 ? " reader" : " readers")
+      + (readers.length > live ? " · " + (readers.length - live) + " retired" : "");
   }
 
   function renderOut() {
@@ -394,7 +431,19 @@ BP.ready(function () {
             loadAll();
           });
       };
-      li.appendChild(back);
+      var side = el("div");
+      side.style.display = "grid";
+      side.style.gap = "6px";
+      side.style.justifyItems = "end";
+      side.appendChild(back);
+      if (BP.isAdmin()) {
+        side.appendChild(deleteButton("Delete", function (btn) {
+          adminDelete("loans", "id", loan.id).then(function (res) {
+            reportDelete(btn, "That checkout", res, "Could not delete that checkout.");
+          });
+        }));
+      }
+      li.appendChild(side);
       list.appendChild(li);
     });
     $("out-empty").hidden = loans.length > 0;
@@ -427,9 +476,59 @@ BP.ready(function () {
       });
   }
 
+  // A delete is refused by Postgres unless the request carries the admin
+  // password, and a refusal comes back as success with no rows rather than as
+  // an error — so the returned rows are what proves it happened.
+  function adminDelete(table, column, value) {
+    var adb = BP.adminClient();
+    if (!adb) return Promise.resolve({ refused: true });
+    return adb.from(table).delete().eq(column, value).select().then(function (res) {
+      if (res.error) return { error: res.error };
+      return (res.data && res.data.length) ? { ok: true } : { refused: true };
+    });
+  }
+
+  // One tap arms the button, a second one does it.
+  function arm(btn, run) {
+    if (btn.dataset.armed === "1") { btn.dataset.armed = ""; run(); return; }
+    btn.dataset.armed = "1";
+    btn.textContent = "Sure?";
+    setTimeout(function () {
+      if (btn.dataset.armed !== "1") return;
+      btn.dataset.armed = "";
+      btn.textContent = "Delete";
+    }, 4000);
+  }
+
+  function deleteButton(label, run) {
+    var btn = el("button", "btn small quiet danger", label);
+    btn.type = "button";
+    btn.onclick = function () { arm(btn, function () { btn.disabled = true; run(btn); }); };
+    return btn;
+  }
+
+  function reportDelete(btn, what, res, busyMessage) {
+    btn.disabled = false;
+    btn.textContent = "Delete";
+    if (res.refused) { BP.toast("Admin mode is off or the password changed.", true); return; }
+    if (res.error) {
+      BP.toast(/still checked out|still has/i.test(res.error.message || "")
+        ? busyMessage
+        : "Could not delete that.", true);
+      return;
+    }
+    BP.toast(what + " deleted");
+    loadAll();
+  }
+
   function setCopies(book, next) {
     if (next < book.checked_out) { BP.toast("That many are already checked out.", true); return; }
-    if (next < 1) { BP.toast("Keep at least one copy — books can't be deleted here.", true); return; }
+    if (next < 1) {
+      BP.toast(BP.isAdmin()
+        ? "Use Delete to take the title off the shelf."
+        : "Keep at least one copy — deleting needs the admin password.", true);
+      return;
+    }
     db.from("books").update({ copies: next }).eq("isbn13", book.isbn13).then(function (res) {
       if (res.error) { BP.toast("Could not change the copy count.", true); return; }
       loadAll();
@@ -464,6 +563,13 @@ BP.ready(function () {
       $(pair[1]).hidden = pair[0] !== which;
     });
   }
+
+  $("admin-bar").hidden = !BP.isAdmin();
+  $("admin-off").onclick = function () {
+    BP.leaveAdmin();
+    BP.toast("Admin mode off");
+    location.reload();
+  };
 
   $("tab-shelf").onclick = function () { showView("shelf"); };
   $("tab-readers").onclick = function () { showView("readers"); };

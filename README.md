@@ -8,6 +8,7 @@ camera; **Library** shows what's on the shelf, what reading level it is, and who
 - `index.html` — the scanner. Point a phone at the barcode on the back of a book and it is
   added to the shared catalogue.
 - `dashboard.html` — the shelf, the reader roster, and everything currently checked out.
+- `admin.html` — sets the admin password, the second credential that permits deleting.
 
 ## How it works
 
@@ -30,15 +31,34 @@ camera; **Library** shows what's on the shelf, what reading level it is, and who
 `library.books` holds one row per title with a copy count. `library.readers` is the roster.
 `library.loans` is append-mostly: a checkout inserts a row, a return stamps `returned_at`.
 Availability is never stored — the `library.catalog` view derives it from open loans, so it
-cannot drift. Two triggers enforce the rules a lending shelf needs: a book cannot go out more
-times than there are copies, and the copy count cannot drop below what is already out.
+cannot drift. Four triggers enforce the rules a lending shelf needs: a book cannot go out more
+times than there are copies, the copy count cannot drop below what is already out, a title
+cannot be deleted while a copy of it is in someone's hands, and a reader cannot be deleted
+while they still hold a book.
 
 ## Access
 
-There is no sign-in. Row-level security lets anyone holding the site URL read, add and update
-rows, and lets nobody delete them. That is the trade for a shelf a child can use without a
-password — treat the URL like a key to the room, and note that anyone who has it can also
-edit the catalogue.
+There are no accounts, but there are two passwords, and both are enforced by Postgres rather
+than by the page. Each request carries its credentials as headers, and every row-level
+security policy calls a function that compares the header against a bcrypt hash stored in
+`library.settings` — a table no policy exposes at all. The hash comparison is wrapped as
+`(select library.pass_ok())` so Postgres evaluates it once per query rather than once per row.
+
+- **The shelf passcode** permits reading, adding and editing. Everyone who borrows books types
+  it once per device; it is kept in `localStorage` afterwards. The first visitor to an
+  unclaimed shelf sets it.
+- **The admin password** is the only thing that permits a delete. It is set on `admin.html`,
+  which requires the shelf passcode, and it must differ from it. It is held in
+  `sessionStorage`, so admin rights end when the tab closes rather than lingering on a shared
+  device. Changing it requires the current one.
+
+A delete needs both credentials at once: the admin password to satisfy the delete policy, and
+the shelf passcode for the row to be visible to the request in the first place. Neither
+password can be recovered — there is no reset, by design, because a reset path reachable from
+the page would be a way around the password.
+
+Anyone holding the shelf passcode can still read and edit the whole catalogue. The passcode
+keeps out strangers who find the URL, not people you gave it to.
 
 ## Running locally
 
